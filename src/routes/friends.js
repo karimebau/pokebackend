@@ -62,14 +62,22 @@ router.get('/requests', auth, async (req, res) => {
 
 // ── Send friend request ────────────────────
 router.post('/', auth, async (req, res) => {
-  const { email } = req.body;
+  const { email, user_code } = req.body;
 
-  if (!email) return res.status(400).json({ error: 'Email requerido' });
-  if (email === req.user.email) return res.status(400).json({ error: 'No puedes invitarte a ti mismo' });
+  if (!email && !user_code) {
+    return res.status(400).json({ error: 'Email o Código de Entrenador requerido' });
+  }
 
   try {
-    const friend = await User.findOne({ email });
+    let friend;
+    if (user_code) {
+      friend = await User.findOne({ user_code: user_code.toUpperCase() });
+    } else {
+      friend = await User.findOne({ email });
+    }
+
     if (!friend) return res.status(404).json({ error: 'Usuario no encontrado' });
+    if (friend.email === req.user.email) return res.status(400).json({ error: 'No puedes invitarte a ti mismo' });
 
     // Check if already friends
     const existingFriend = await Friend.findOne({ user_id: req.user.id, friend_id: friend._id });

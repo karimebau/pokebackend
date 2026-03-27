@@ -5,6 +5,11 @@ const User = require('../models/User');
 
 const router = express.Router();
 
+// ── Helpers ──────────────────────────────────────────────────
+const generateUserCode = () => {
+  return 'PK-' + Math.random().toString(36).substring(2, 8).toUpperCase();
+};
+
 // ── Register ──────────────────────────────────────────────────
 router.post('/register', async (req, res) => {
   const { username, email, password } = req.body;
@@ -23,11 +28,21 @@ router.post('/register', async (req, res) => {
       return res.status(409).json({ error: 'El correo ya está registrado' });
     }
 
+    // Generar código único
+    let user_code;
+    let isUnique = false;
+    while (!isUnique) {
+      user_code = generateUserCode();
+      const existingCode = await User.findOne({ user_code });
+      if (!existingCode) isUnique = true;
+    }
+
     const password_hash = bcrypt.hashSync(password, 10);
     const user = new User({
       username,
       email,
-      password_hash
+      password_hash,
+      user_code
     });
 
     await user.save();
@@ -40,7 +55,12 @@ router.post('/register', async (req, res) => {
 
     res.status(201).json({ 
       token, 
-      user: { id: user._id, email: user.email, username: user.username } 
+      user: { 
+        id: user._id, 
+        email: user.email, 
+        username: user.username,
+        user_code: user.user_code 
+      } 
     });
   } catch (error) {
     console.error('Register error:', error);
@@ -74,7 +94,12 @@ router.post('/login', async (req, res) => {
 
     res.json({ 
       token, 
-      user: { id: user._id, email: user.email, username: user.username } 
+      user: { 
+        id: user._id, 
+        email: user.email, 
+        username: user.username,
+        user_code: user.user_code 
+      } 
     });
   } catch (error) {
     console.error('Login error:', error);
