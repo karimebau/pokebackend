@@ -1,147 +1,152 @@
 const express = require('express');
 const auth = require('../middleware/auth');
-const db = require('../db/database');
+const Team = require('../models/Team');
 
 const router = express.Router();
 
 // ── List user's teams ─────────────────────────────────────────
-router.get('/', auth, (req, res) => {
-  const teams = db.prepare(
-    'SELECT * FROM teams WHERE user_id = ? ORDER BY created_at DESC'
-  ).all(req.user.id);
-
-  // Attach pokemon to each team
-  const teamsWithPokemon = teams.map(team => {
-    const pokemon = db.prepare(
-      'SELECT pokemon_id, slot FROM team_pokemon WHERE team_id = ? ORDER BY slot'
-    ).all(team.id);
-
-    return { ...team, pokemon };
-  });
-
-  res.json(teamsWithPokemon);
+router.get('/', auth, async (req, res) => {
+  try {
+    const teams = await Team.find({ user_id: req.user.id })
+      .sort({ created_at: -1 });
+    res.json(teams);
+  } catch (error) {
+    console.error('Fetch teams error:', error);
+    res.status(500).json({ error: 'Error al obtener equipos' });
+  }
 });
 
 // ── List a specific user's teams (for battles) ────────────────
-router.get('/user/:userId', auth, (req, res) => {
-  const teams = db.prepare(
-    'SELECT id, name, created_at FROM teams WHERE user_id = ? ORDER BY created_at DESC'
-  ).all(req.params.userId);
+router.get('/user/:userId', auth, async (req, res) => {
+  try {
+    const teams = await Team.find({ user_id: req.params.userId })
+      .sort({ created_at: -1 });
+    
+    // For battles, we might need a count etc, but since it's embedded, it's already there
+    const teamsWithCount = teams.map(t => ({
+      ...t.toObject(),
+      id: t._id, // compatibility
+      pokemon_count: t.pokemon.length
+    }));
 
-  // Attach pokemon counts and IDs to each team
-  const teamsWithPokemon = teams.map(team => {
-    const pokemon = db.prepare(
-      'SELECT pokemon_id, slot FROM team_pokemon WHERE team_id = ? ORDER BY slot'
-    ).all(team.id);
-
-    return { ...team, pokemon_count: pokemon.length, pokemon };
-  });
-
-  res.json(teamsWithPokemon);
+    res.json(teamsWithCount);
+  } catch (error) {
+    console.error('Fetch user teams error:', error);
+    res.status(500).json({ error: 'Error al obtener equipos del usuario' });
+  }
 });
 
 // ── Create team ───────────────────────────────────────────────
-router.post('/', auth, (req, res) => {
+router.post('/', auth, async (req, res) => {
   const { name } = req.body;
 
   if (!name) {
     return res.status(400).json({ error: 'Nombre del equipo requerido' });
   }
 
-  const result = db.prepare(
-    'INSERT INTO teams (user_id, name) VALUES (?, ?)'
-  ).run(req.user.id, name);
-
-  res.status(201).json({ id: result.lastInsertRowid, name, pokemon: [] });
+  try {
+    const team = new Team({
+      user_id: req.user.id,
+      name,
+      pokemon: []
+    });
+    await team.save();
+    res.status(201).json({ id: team._id, name: team.name, pokemon: [] });
+  } catch (error) {
+    console.error('Create team error:', error);
+    res.status(500).json({ error: 'Error al crear equipo' });
+  }
 });
 
 // ── Update team name ──────────────────────────────────────────
-router.put('/:id', auth, (req, res) => {
+router.put('/:id', auth, async (req, res) => {
   const { name } = req.body;
-  const team = db.prepare('SELECT * FROM teams WHERE id = ? AND user_id = ?')
-    .get(req.params.id, req.user.id);
+  try {
+    const team = await Team.findOneAndUpdate(
+      { _id: req.params.id, user_id: req.user.id },
+      { name },
+      { new: true }
+    );
 
-  if (!team) {
-    return res.status(404).json({ error: 'Equipo no encontrado' });
+    if (!team) {
+      return res.status(404).json({ error: 'Equipo no encontrado' });
+    }
+
+    res.json({ message: 'Equipo actualizado', team });
+  } catch (error) {
+    res.status(500).json({ error: 'Error al actualizar equipo' });
   }
-
-  if (name) {
-    db.prepare('UPDATE teams SET name = ? WHERE id = ?').run(name, team.id);
-  }
-
-  res.json({ message: 'Equipo actualizado' });
 });
 
 // ── Delete team ───────────────────────────────────────────────
-router.delete('/:id', auth, (req, res) => {
-  const team = db.prepare('SELECT * FROM teams WHERE id = ? AND user_id = ?')
-    .get(req.params.id, req.user.id);
+router.delete('/:id', auth, async (req, res) => {
+  try {
+    const team = await Team.findOneAndDelete({ _id: req.params.id, user_id: req.user.id });
 
-  if (!team) {
-    return res.status(404).json({ error: 'Equipo no encontrado' });
+    if (!team) {
+      return res.status(404).json({ error: 'Equipo no encontrado' });
+    }
+
+    res.json({ message: 'Equipo eliminado' });
+  } catch (error) {
+    res.status(500).json({ error: 'Error al eliminar equipo' });
   }
-
-  db.prepare('DELETE FROM teams WHERE id = ?').run(team.id);
-  res.json({ message: 'Equipo eliminado' });
 });
 
 // ── Add pokemon to team ───────────────────────────────────────
-router.post('/:id/pokemon', auth, (req, res) => {
+router.post('/:id/pokemon', auth, async (req, res) => {
   const { pokemon_id } = req.body;
-  const team = db.prepare('SELECT * FROM teams WHERE id = ? AND user_id = ?')
-    .get(req.params.id, req.user.id);
-
-  if (!team) {
-    return res.status(404).json({ error: 'Equipo no encontrado' });
-  }
-
-  // Check current count
-  const count = db.prepare('SELECT COUNT(*) as count FROM team_pokemon WHERE team_id = ?')
-    .get(team.id).count;
-
-  if (count >= 6) {
-    return res.status(400).json({ error: 'El equipo ya tiene 6 pokémon' });
-  }
-
-  // Find next available slot
-  const usedSlots = db.prepare('SELECT slot FROM team_pokemon WHERE team_id = ?')
-    .all(team.id).map(r => r.slot);
-  
-  let nextSlot = 1;
-  while (usedSlots.includes(nextSlot)) nextSlot++;
-
   try {
-    db.prepare(
-      'INSERT INTO team_pokemon (team_id, pokemon_id, slot) VALUES (?, ?, ?)'
-    ).run(team.id, pokemon_id, nextSlot);
+    const team = await Team.findOne({ _id: req.params.id, user_id: req.user.id });
 
-    res.status(201).json({ message: 'Pokémon agregado al equipo', slot: nextSlot });
-  } catch (err) {
-    if (err.message.includes('UNIQUE')) {
+    if (!team) {
+      return res.status(404).json({ error: 'Equipo no encontrado' });
+    }
+
+    if (team.pokemon.length >= 6) {
+      return res.status(400).json({ error: 'El equipo ya tiene 6 pokémon' });
+    }
+
+    if (team.pokemon.some(p => p.pokemon_id === pokemon_id)) {
       return res.status(409).json({ error: 'Este pokémon ya está en el equipo' });
     }
+
+    // Find next available slot
+    const usedSlots = team.pokemon.map(p => p.slot);
+    let nextSlot = 1;
+    while (usedSlots.includes(nextSlot)) nextSlot++;
+
+    team.pokemon.push({ pokemon_id, slot: nextSlot });
+    await team.save();
+
+    res.status(201).json({ message: 'Pokémon agregado al equipo', slot: nextSlot });
+  } catch (error) {
+    console.error('Add pokemon error:', error);
     res.status(500).json({ error: 'Error al agregar pokémon' });
   }
 });
 
 // ── Remove pokemon from team ──────────────────────────────────
-router.delete('/:id/pokemon/:pokemonId', auth, (req, res) => {
-  const team = db.prepare('SELECT * FROM teams WHERE id = ? AND user_id = ?')
-    .get(req.params.id, req.user.id);
+router.delete('/:id/pokemon/:pokemonId', auth, async (req, res) => {
+  try {
+    const team = await Team.findOne({ _id: req.params.id, user_id: req.user.id });
 
-  if (!team) {
-    return res.status(404).json({ error: 'Equipo no encontrado' });
+    if (!team) {
+      return res.status(404).json({ error: 'Equipo no encontrado' });
+    }
+
+    const initialLength = team.pokemon.length;
+    team.pokemon = team.pokemon.filter(p => p.pokemon_id !== parseInt(req.params.pokemonId));
+
+    if (team.pokemon.length === initialLength) {
+      return res.status(404).json({ error: 'Pokémon no encontrado en el equipo' });
+    }
+
+    await team.save();
+    res.json({ message: 'Pokémon removido del equipo' });
+  } catch (error) {
+    res.status(500).json({ error: 'Error al remover pokémon' });
   }
-
-  const result = db.prepare(
-    'DELETE FROM team_pokemon WHERE team_id = ? AND pokemon_id = ?'
-  ).run(team.id, req.params.pokemonId);
-
-  if (result.changes === 0) {
-    return res.status(404).json({ error: 'Pokémon no encontrado en el equipo' });
-  }
-
-  res.json({ message: 'Pokémon removido del equipo' });
 });
 
 module.exports = router;

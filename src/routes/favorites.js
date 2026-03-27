@@ -1,20 +1,23 @@
 const express = require('express');
 const auth = require('../middleware/auth');
-const db = require('../db/database');
+const Favorite = require('../models/Favorite');
 
 const router = express.Router();
 
 // ── List favorites ────────────────────────────────────────────
-router.get('/', auth, (req, res) => {
-  const favorites = db.prepare(
-    'SELECT pokemon_id, created_at FROM favorites WHERE user_id = ? ORDER BY created_at DESC'
-  ).all(req.user.id);
-
-  res.json(favorites);
+router.get('/', auth, async (req, res) => {
+  try {
+    const favorites = await Favorite.find({ user_id: req.user.id })
+      .sort({ created_at: -1 });
+    res.json(favorites);
+  } catch (error) {
+    console.error('Fetch favorites error:', error);
+    res.status(500).json({ error: 'Error al obtener favoritos' });
+  }
 });
 
 // ── Add favorite ──────────────────────────────────────────────
-router.post('/', auth, (req, res) => {
+router.post('/', auth, async (req, res) => {
   const { pokemon_id } = req.body;
 
   if (!pokemon_id) {
@@ -22,30 +25,38 @@ router.post('/', auth, (req, res) => {
   }
 
   try {
-    db.prepare(
-      'INSERT INTO favorites (user_id, pokemon_id) VALUES (?, ?)'
-    ).run(req.user.id, pokemon_id);
-
+    const favorite = new Favorite({
+      user_id: req.user.id,
+      pokemon_id
+    });
+    await favorite.save();
     res.status(201).json({ message: 'Pokémon agregado a favoritos' });
   } catch (err) {
-    if (err.message.includes('UNIQUE')) {
+    if (err.code === 11000) {
       return res.status(409).json({ error: 'Ya está en favoritos' });
     }
+    console.error('Add favorite error:', err);
     res.status(500).json({ error: 'Error al agregar favorito' });
   }
 });
 
 // ── Remove favorite ──────────────────────────────────────────
-router.delete('/:pokemonId', auth, (req, res) => {
-  const result = db.prepare(
-    'DELETE FROM favorites WHERE user_id = ? AND pokemon_id = ?'
-  ).run(req.user.id, req.params.pokemonId);
+router.delete('/:pokemonId', auth, async (req, res) => {
+  try {
+    const result = await Favorite.findOneAndDelete({
+      user_id: req.user.id,
+      pokemon_id: req.params.pokemonId
+    });
 
-  if (result.changes === 0) {
-    return res.status(404).json({ error: 'Favorito no encontrado' });
+    if (!result) {
+      return res.status(404).json({ error: 'Favorito no encontrado' });
+    }
+
+    res.json({ message: 'Favorito eliminado' });
+  } catch (error) {
+    console.error('Remove favorite error:', error);
+    res.status(500).json({ error: 'Error al eliminar favorito' });
   }
-
-  res.json({ message: 'Favorito eliminado' });
 });
 
 module.exports = router;

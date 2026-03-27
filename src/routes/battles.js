@@ -1,6 +1,9 @@
 const express = require('express');
 const auth = require('../middleware/auth');
-const db = require('../db/database');
+const User = require('../models/User');
+const Team = require('../models/Team');
+const Friend = require('../models/Friend');
+const Battle = require('../models/Battle');
 const pokeapi = require('../services/pokeapi');
 const { runBattle } = require('../services/battleEngine');
 
@@ -16,47 +19,31 @@ router.post('/', auth, async (req, res) => {
     }
 
     // Verify friendship
-    const friendship = db.prepare(
-      'SELECT id FROM friends WHERE user_id = ? AND friend_id = ?'
-    ).get(req.user.id, opponent_id);
+    const friendship = await Friend.findOne({
+      user_id: req.user.id,
+      friend_id: opponent_id
+    });
 
     if (!friendship) {
       return res.status(403).json({ error: 'Solo puedes batallar con amigos' });
     }
 
-    // Get challenger team pokemon
-    const challengerTeam = db.prepare('SELECT * FROM teams WHERE id = ? AND user_id = ?')
-      .get(challenger_team_id, req.user.id);
+    // Get challenger team
+    const challengerTeam = await Team.findOne({ _id: challenger_team_id, user_id: req.user.id });
+    if (!challengerTeam) return res.status(404).json({ error: 'Tu equipo no fue encontrado' });
 
-    if (!challengerTeam) {
-      return res.status(404).json({ error: 'Tu equipo no fue encontrado' });
-    }
+    // Get opponent team
+    const opponentTeam = await Team.findOne({ _id: opponent_team_id, user_id: opponent_id });
+    if (!opponentTeam) return res.status(404).json({ error: 'El equipo del oponente no fue encontrado' });
 
-    // Get opponent team pokemon
-    const opponentTeam = db.prepare('SELECT * FROM teams WHERE id = ? AND user_id = ?')
-      .get(opponent_team_id, opponent_id);
-
-    if (!opponentTeam) {
-      return res.status(404).json({ error: 'El equipo del oponente no fue encontrado' });
-    }
-
-    // Get pokemon IDs from both teams
-    const challengerPokemonIds = db.prepare(
-      'SELECT pokemon_id FROM team_pokemon WHERE team_id = ? ORDER BY slot'
-    ).all(challenger_team_id).map(r => r.pokemon_id);
-
-    const opponentPokemonIds = db.prepare(
-      'SELECT pokemon_id FROM team_pokemon WHERE team_id = ? ORDER BY slot'
-    ).all(opponent_team_id).map(r => r.pokemon_id);
-
-    if (challengerPokemonIds.length === 0 || opponentPokemonIds.length === 0) {
+    if (challengerTeam.pokemon.length === 0 || opponentTeam.pokemon.length === 0) {
       return res.status(400).json({ error: 'Ambos equipos deben tener al menos un pokémon' });
     }
 
     // Fetch battle-ready pokemon data from PokeAPI
     const [team1Data, team2Data] = await Promise.all([
-      Promise.all(challengerPokemonIds.map(id => pokeapi.getPokemonForBattle(id))),
-      Promise.all(opponentPokemonIds.map(id => pokeapi.getPokemonForBattle(id))),
+      Promise.all(challengerTeam.pokemon.sort((a,b) => a.slot - b.slot).map(p => pokeapi.getPokemonForBattle(p.pokemon_id))),
+      Promise.all(opponentTeam.pokemon.sort((a,b) => a.slot - b.slot).map(p => pokeapi.getPokemonForBattle(p.pokemon_id))),
     ]);
 
     // Run the battle
@@ -68,24 +55,30 @@ router.post('/', auth, async (req, res) => {
     else if (battleResult.winner === 2) winnerId = opponent_id;
 
     // Save battle to DB
-    const result = db.prepare(`
-      INSERT INTO battles (challenger_id, opponent_id, challenger_team_id, opponent_team_id, winner_id, log)
-      VALUES (?, ?, ?, ?, ?, ?)
-    `).run(
-      req.user.id, opponent_id,
-      challenger_team_id, opponent_team_id,
-      winnerId,
-      JSON.stringify(battleResult.log)
-    );
+    const battle = new Battle({
+      challenger_id: req.user.id,
+      opponent_id,
+      challenger_team_id,
+      opponent_team_id,
+      winner_id: winnerId,
+      log: battleResult.log
+    });
+    await battle.save();
+
+    const opponentUser = await User.findById(opponent_id);
 
     res.json({
-      id: result.lastInsertRowid,
+      id: battle._id,
       winner: battleResult.winner,
       winner_id: winnerId,
-      challenger: { id: req.user.id, username: req.user.username, team: team1Data.map(p => ({ id: p.id, name: p.name, sprite: p.sprite })) },
+      challenger: { 
+        id: req.user.id, 
+        username: req.user.username, 
+        team: team1Data.map(p => ({ id: p.id, name: p.name, sprite: p.sprite })) 
+      },
       opponent: {
         id: opponent_id,
-        username: db.prepare('SELECT username FROM users WHERE id = ?').get(opponent_id)?.username,
+        username: opponentUser?.username,
         team: team2Data.map(p => ({ id: p.id, name: p.name, sprite: p.sprite })),
       },
       log: battleResult.log,
@@ -97,29 +90,34 @@ router.post('/', auth, async (req, res) => {
 });
 
 // ── Battle history ────────────────────────────────────────────
-router.get('/', auth, (req, res) => {
-  const battles = db.prepare(`
-    SELECT b.*,
-      u1.username as challenger_name,
-      u2.username as opponent_name,
-      t1.name as challenger_team_name,
-      t2.name as opponent_team_name,
-      uw.username as winner_name
-    FROM battles b
-    JOIN users u1 ON u1.id = b.challenger_id
-    JOIN users u2 ON u2.id = b.opponent_id
-    JOIN teams t1 ON t1.id = b.challenger_team_id
-    JOIN teams t2 ON t2.id = b.opponent_team_id
-    LEFT JOIN users uw ON uw.id = b.winner_id
-    WHERE b.challenger_id = ? OR b.opponent_id = ?
-    ORDER BY b.created_at DESC
-    LIMIT 20
-  `).all(req.user.id, req.user.id);
+router.get('/', auth, async (req, res) => {
+  try {
+    const battles = await Battle.find({
+      $or: [{ challenger_id: req.user.id }, { opponent_id: req.user.id }]
+    })
+    .populate('challenger_id', 'username')
+    .populate('opponent_id', 'username')
+    .populate('challenger_team_id', 'name')
+    .populate('opponent_team_id', 'name')
+    .populate('winner_id', 'username')
+    .sort({ created_at: -1 })
+    .limit(20);
 
-  res.json(battles.map(b => ({
-    ...b,
-    log: b.log ? JSON.parse(b.log) : [],
-  })));
+    res.json(battles.map(b => ({
+      id: b._id,
+      created_at: b.created_at,
+      challenger_name: b.challenger_id.username,
+      opponent_name: b.opponent_id.username,
+      challenger_team_name: b.challenger_team_id?.name || 'Equipo eliminado',
+      opponent_team_name: b.opponent_team_id?.name || 'Equipo eliminado',
+      winner_id: b.winner_id?._id,
+      winner_name: b.winner_id?.username || 'Empate/Desconocido',
+      log: b.log
+    })));
+  } catch (error) {
+    console.error('Fetch history error:', error);
+    res.status(500).json({ error: 'Error al obtener historial' });
+  }
 });
 
 module.exports = router;
