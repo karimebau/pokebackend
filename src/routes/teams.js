@@ -9,7 +9,13 @@ router.get('/', auth, async (req, res) => {
   try {
     const teams = await Team.find({ user_id: req.user.id })
       .sort({ created_at: -1 });
-    res.json(teams);
+    
+    // Map _id to id for frontend compatibility
+    const formattedTeams = teams.map(t => ({
+      ...t.toObject(),
+      id: t._id
+    }));
+    res.json(formattedTeams);
   } catch (error) {
     console.error('Fetch teams error:', error);
     res.status(500).json({ error: 'Error al obtener equipos' });
@@ -47,6 +53,7 @@ router.post('/', auth, async (req, res) => {
   try {
     const team = new Team({
       user_id: req.user.id,
+      user_email: req.user.email,
       name,
       pokemon: []
     });

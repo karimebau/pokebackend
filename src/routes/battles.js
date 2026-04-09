@@ -6,6 +6,7 @@ const Friend = require('../models/Friend');
 const Battle = require('../models/Battle');
 const pokeapi = require('../services/pokeapi');
 const { runBattle } = require('../services/battleEngine');
+const sockets = require('../sockets');
 
 const router = express.Router();
 
@@ -49,25 +50,29 @@ router.post('/', auth, async (req, res) => {
     // Run the battle
     const battleResult = runBattle(team1Data, team2Data);
 
+    const opponentUser = await User.findById(opponent_id);
+
     // Determine winner user ID
     let winnerId = null;
-    if (battleResult.winner === 1) winnerId = req.user.id;
-    else if (battleResult.winner === 2) winnerId = opponent_id;
+    let winnerEmail = null;
+    if (battleResult.winner === 1) { winnerId = req.user.id; winnerEmail = req.user.email; }
+    else if (battleResult.winner === 2) { winnerId = opponent_id; winnerEmail = opponentUser.email; }
 
     // Save battle to DB
     const battle = new Battle({
       challenger_id: req.user.id,
+      challenger_email: req.user.email,
       opponent_id,
+      opponent_email: opponentUser.email,
       challenger_team_id,
       opponent_team_id,
       winner_id: winnerId,
+      winner_email: winnerEmail,
       log: battleResult.log
     });
     await battle.save();
 
-    const opponentUser = await User.findById(opponent_id);
-
-    res.json({
+    const payload = {
       id: battle._id,
       winner: battleResult.winner,
       winner_id: winnerId,
@@ -82,7 +87,18 @@ router.post('/', auth, async (req, res) => {
         team: team2Data.map(p => ({ id: p.id, name: p.name, sprite: p.sprite })),
       },
       log: battleResult.log,
-    });
+    };
+
+    const io = sockets.getIo();
+    if (io) {
+      const challengerSocket = sockets.getSocketId(req.user.id);
+      const defenderSocket = sockets.getSocketId(opponent_id);
+      
+      if (challengerSocket) io.to(challengerSocket).emit('battle_started', payload);
+      if (defenderSocket) io.to(defenderSocket).emit('battle_started', payload);
+    }
+
+    res.json(payload);
   } catch (error) {
     console.error('Error in battle:', error);
     res.status(500).json({ error: 'Error al ejecutar la batalla' });

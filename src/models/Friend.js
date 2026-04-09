@@ -2,7 +2,9 @@ const mongoose = require('mongoose');
 
 const FriendSchema = new mongoose.Schema({
   user_id: { type: mongoose.Schema.Types.ObjectId, ref: 'User', required: true },
+  user_email: { type: String, required: false },
   friend_id: { type: mongoose.Schema.Types.ObjectId, ref: 'User', required: true },
+  friend_email: { type: String, required: false },
   created_at: { type: Date, default: Date.now }
 });
 

@@ -55,7 +55,13 @@ app.use((err, req, res, next) => {
   });
 });
 
+const http = require('http');
+const { initSockets } = require('./sockets');
+
+const server = http.createServer(app);
+initSockets(server);
+
 // ── Start server ──────────────────────────────────────────────
-app.listen(PORT, () => {
+server.listen(PORT, () => {
   console.log(`🚀 Pokedex Backend running on http://localhost:${PORT}`);
 });

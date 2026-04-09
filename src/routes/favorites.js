@@ -27,6 +27,7 @@ router.post('/', auth, async (req, res) => {
   try {
     const favorite = new Favorite({
       user_id: req.user.id,
+      user_email: req.user.email,
       pokemon_id
     });
     await favorite.save();

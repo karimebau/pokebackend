@@ -95,13 +95,16 @@ router.post('/', auth, async (req, res) => {
 
     const request = new FriendRequest({
       sender_id: req.user.id,
-      receiver_id: friend._id
+      sender_email: req.user.email,
+      receiver_id: friend._id,
+      receiver_email: friend.email
     });
     await request.save();
 
     // Notification
     const notif = new Notification({
       user_id: friend._id,
+      user_email: friend.email,
       type: 'friend_request',
       message: `${req.user.username} te envió una solicitud de amistad 🌸`
     });
@@ -123,10 +126,12 @@ router.post('/requests/:id/accept', auth, async (req, res) => {
     const request = await FriendRequest.findOne({ _id: req.params.id, receiver_id: req.user.id, status: 'pending' });
     if (!request) return res.status(404).json({ error: 'Solicitud no encontrada' });
 
+    const sender = await User.findById(request.sender_id);
+
     // Add bidirectional friendship
     await Friend.create([
-      { user_id: request.sender_id, friend_id: request.receiver_id },
-      { user_id: request.receiver_id, friend_id: request.sender_id }
+      { user_id: request.sender_id, user_email: sender.email, friend_id: request.receiver_id, friend_email: req.user.email },
+      { user_id: request.receiver_id, user_email: req.user.email, friend_id: request.sender_id, friend_email: sender.email }
     ]);
 
     // Update request
@@ -136,6 +141,7 @@ router.post('/requests/:id/accept', auth, async (req, res) => {
     // Notification for sender
     const notif = new Notification({
       user_id: request.sender_id,
+      user_email: sender.email,
       type: 'friend_request_accepted',
       message: `${req.user.username} aceptó tu solicitud de amistad 🎉`
     });
