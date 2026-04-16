@@ -5,7 +5,7 @@ const Team = require('../models/Team');
 const Friend = require('../models/Friend');
 const Battle = require('../models/Battle');
 const pokeapi = require('../services/pokeapi');
-const { runBattle } = require('../services/battleEngine');
+const { initBattle, activeBattles } = require('../services/battleEngine');
 const sockets = require('../sockets');
 
 const router = express.Router();
@@ -47,18 +47,12 @@ router.post('/', auth, async (req, res) => {
       Promise.all(opponentTeam.pokemon.sort((a,b) => a.slot - b.slot).map(p => pokeapi.getPokemonForBattle(p.pokemon_id))),
     ]);
 
-    // Run the battle
-    const battleResult = runBattle(team1Data, team2Data);
+    // Initialize Turn-Based Battle
+    const state = initBattle(team1Data, team2Data);
 
     const opponentUser = await User.findById(opponent_id);
 
-    // Determine winner user ID
-    let winnerId = null;
-    let winnerEmail = null;
-    if (battleResult.winner === 1) { winnerId = req.user.id; winnerEmail = req.user.email; }
-    else if (battleResult.winner === 2) { winnerId = opponent_id; winnerEmail = opponentUser.email; }
-
-    // Save battle to DB
+    // Save battle to DB initially with no winner
     const battle = new Battle({
       challenger_id: req.user.id,
       challenger_email: req.user.email,
@@ -66,16 +60,25 @@ router.post('/', auth, async (req, res) => {
       opponent_email: opponentUser.email,
       challenger_team_id,
       opponent_team_id,
-      winner_id: winnerId,
-      winner_email: winnerEmail,
-      log: battleResult.log
+      winner_id: null,
+      winner_email: null,
+      log: []
     });
     await battle.save();
 
+    // Store in-memory
+    state.dbId = battle._id;
+    state.socketP1 = req.user.id;
+    state.socketP2 = opponent_id;
+    state.p1Username = req.user.username;
+    state.p2Username = opponentUser?.username || 'Oponente';
+    state.actionsQueue = { p1: null, p2: null };
+    
+    activeBattles.set(battle._id.toString(), state);
+
     const payload = {
       id: battle._id,
-      winner: battleResult.winner,
-      winner_id: winnerId,
+      winner: null,
       challenger: { 
         id: req.user.id, 
         username: req.user.username, 
@@ -86,7 +89,11 @@ router.post('/', auth, async (req, res) => {
         username: opponentUser?.username,
         team: team2Data.map(p => ({ id: p.id, name: p.name, sprite: p.sprite })),
       },
-      log: battleResult.log,
+      turnNumber: 1,
+      initialState: {
+        p1Active: state.t1Pokemon[0],
+        p2Active: state.t2Pokemon[0]
+      }
     };
 
     const io = sockets.getIo();

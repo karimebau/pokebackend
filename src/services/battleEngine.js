@@ -1,4 +1,6 @@
 // ── Type Effectiveness Chart ──────────────────────────────────
+const activeBattles = new Map();
+
 const TYPE_CHART = {
   normal:   { rock: 0.5, ghost: 0, steel: 0.5 },
   fire:     { fire: 0.5, water: 0.5, grass: 2, ice: 2, bug: 2, rock: 0.5, dragon: 0.5, steel: 2 },
@@ -225,125 +227,100 @@ function executeAttack(attacker, defender, move, log, turn) {
   return { damage, hit: true, typeMultiplier, isCritical };
 }
 
-// ── Run a full battle ──────────────────────────────────────────
-function runBattle(team1, team2) {
-  const log = [];
-  let t1Index = 0;
-  let t2Index = 0;
-
+// ── Init a Turn-based Battle ───────────────────────────────────────
+function initBattle(team1, team2) {
   const t1Pokemon = team1.map(p => ({ ...p, currentHp: p.stats.hp, status: STATUS.NONE }));
   const t2Pokemon = team2.map(p => ({ ...p, currentHp: p.stats.hp, status: STATUS.NONE }));
 
-  log.push({ type: 'start', message: '⚔️ ¡La batalla ha comenzado! ¡Que el mejor entrenador gane!' });
-
-  let turn = 0;
-  const MAX_TURNS = 200;
-
-  while (t1Index < t1Pokemon.length && t2Index < t2Pokemon.length && turn < MAX_TURNS) {
-    turn++;
-    const p1 = t1Pokemon[t1Index];
-    const p2 = t2Pokemon[t2Index];
-
-    // New matchup header
-    if (turn === 1 || log[log.length - 1]?.type === 'switch') {
-      log.push({
-        type: 'matchup',
-        message: `🆚 ${p1.name} vs ${p2.name}`,
-        pokemon1: { name: p1.name, id: p1.id, hp: p1.currentHp, maxHp: p1.stats.hp },
-        pokemon2: { name: p2.name, id: p2.id, hp: p2.currentHp, maxHp: p2.stats.hp },
-      });
-    }
-
-    // Speed determines turn order (paralysis halves speed)
-    const p1Speed = p1.stats.speed * (p1.status === STATUS.PARALYZED ? 0.5 : 1);
-    const p2Speed = p2.stats.speed * (p2.status === STATUS.PARALYZED ? 0.5 : 1);
-    const p1First = p1Speed >= p2Speed;
-    const first  = p1First ? { atk: p1, def: p2, teamIdx: 1 } : { atk: p2, def: p1, teamIdx: 2 };
-    const second = p1First ? { atk: p2, def: p1, teamIdx: 2 } : { atk: p1, def: p2, teamIdx: 1 };
-
-    // First attacker's turn
-    if (canAttack(first.atk, log)) {
-      const move1 = selectMove(first.atk, first.def);
-      if (move1) executeAttack(first.atk, first.def, move1, log, turn);
-    }
-
-    if (first.def.currentHp <= 0) {
-      first.def.currentHp = 0;
-      log.push({ type: 'faint', message: `💀 ¡${first.def.name} se ha debilitado!`, pokemon: first.def.name });
-      if (first.teamIdx === 1) {
-        t2Index++;
-        if (t2Index < t2Pokemon.length) {
-          log.push({ type: 'switch', message: `🔄 ¡${t2Pokemon[t2Index].name} entra al combate!`, pokemon: t2Pokemon[t2Index].name, team: 2 });
-        }
-      } else {
-        t1Index++;
-        if (t1Index < t1Pokemon.length) {
-          log.push({ type: 'switch', message: `🔄 ¡${t1Pokemon[t1Index].name} entra al combate!`, pokemon: t1Pokemon[t1Index].name, team: 1 });
-        }
-      }
-      continue;
-    }
-
-    // Second attacker's turn
-    if (canAttack(second.atk, log)) {
-      const move2 = selectMove(second.atk, second.def);
-      if (move2) executeAttack(second.atk, second.def, move2, log, turn);
-    }
-
-    if (second.def.currentHp <= 0) {
-      second.def.currentHp = 0;
-      log.push({ type: 'faint', message: `💀 ¡${second.def.name} se ha debilitado!`, pokemon: second.def.name });
-      if (second.teamIdx === 1) {
-        t2Index++;
-        if (t2Index < t2Pokemon.length) {
-          log.push({ type: 'switch', message: `🔄 ¡${t2Pokemon[t2Index].name} entra al combate!`, pokemon: t2Pokemon[t2Index].name, team: 2 });
-        }
-      } else {
-        t1Index++;
-        if (t1Index < t1Pokemon.length) {
-          log.push({ type: 'switch', message: `🔄 ¡${t1Pokemon[t1Index].name} entra al combate!`, pokemon: t1Pokemon[t1Index].name, team: 1 });
-        }
-      }
-      continue;
-    }
-
-    // End-of-turn status damage
-    applyStatusDamage(p1, log);
-    applyStatusDamage(p2, log);
-
-    // Check again after status damage
-    if (p1.currentHp <= 0) {
-      p1.currentHp = 0;
-      log.push({ type: 'faint', message: `💀 ¡${p1.name} no ha sobrevivido al daño de estado!`, pokemon: p1.name });
-      t1Index++;
-      if (t1Index < t1Pokemon.length) {
-        log.push({ type: 'switch', message: `🔄 ¡${t1Pokemon[t1Index].name} entra al combate!`, pokemon: t1Pokemon[t1Index].name, team: 1 });
-      }
-    }
-    if (p2.currentHp <= 0) {
-      p2.currentHp = 0;
-      log.push({ type: 'faint', message: `💀 ¡${p2.name} no ha sobrevivido al daño de estado!`, pokemon: p2.name });
-      t2Index++;
-      if (t2Index < t2Pokemon.length) {
-        log.push({ type: 'switch', message: `🔄 ¡${t2Pokemon[t2Index].name} entra al combate!`, pokemon: t2Pokemon[t2Index].name, team: 2 });
-      }
-    }
-  }
-
-  // Determine winner
-  let winner;
-  if (t1Index >= t1Pokemon.length && t2Index >= t2Pokemon.length) {
-    winner = null;
-    log.push({ type: 'end', message: '🤝 ¡La batalla terminó en empate!' });
-  } else if (t1Index >= t1Pokemon.length) {
-    winner = 2;
-    log.push({ type: 'end', message: '🏆 ¡El Equipo 2 gana la batalla!', winner: 2 });
-  } else {
-    winner = 1;
-    log.push({ type: 'end', message: '🏆 ¡El Equipo 1 gana la batalla!', winner: 1 });
-  }
-
-  return { winner, log };
+  return {
+    t1Pokemon,
+    t2Pokemon,
+    t1Index: 0,
+    t2Index: 0,
+    turn: 0,
+    winner: null,
+    _justSwitched: true,
+    log: []
+  };
 }
 
-module.exports = { runBattle };
+// ── Process One Turn ──────────────────────────────────────────
+function processTurn(state, move1, move2) {
+  const turnLog = [];
+  state.turn++;
+  
+  const p1 = state.t1Pokemon[state.t1Index];
+  const p2 = state.t2Pokemon[state.t2Index];
+
+  if (state._justSwitched || state.turn === 1) {
+    turnLog.push({
+      type: 'matchup',
+      message: `🆚 ${p1.name} vs ${p2.name}`,
+      pokemon1: { name: p1.name, id: p1.id, hp: p1.currentHp, maxHp: p1.stats.hp },
+      pokemon2: { name: p2.name, id: p2.id, hp: p2.currentHp, maxHp: p2.stats.hp },
+    });
+    state._justSwitched = false;
+  }
+
+  const p1Speed = p1.stats.speed * (p1.status === STATUS.PARALYZED ? 0.5 : 1);
+  const p2Speed = p2.stats.speed * (p2.status === STATUS.PARALYZED ? 0.5 : 1);
+  const p1First = p1Speed >= p2Speed;
+  
+  const first  = p1First ? { atk: p1, def: p2, teamIdx: 1, move: move1 } : { atk: p2, def: p1, teamIdx: 2, move: move2 };
+  const second = p1First ? { atk: p2, def: p1, teamIdx: 2, move: move2 } : { atk: p1, def: p2, teamIdx: 1, move: move1 };
+
+  // First attacker's turn
+  if (canAttack(first.atk, turnLog) && first.atk.currentHp > 0) {
+    if (first.move) executeAttack(first.atk, first.def, first.move, turnLog, state.turn);
+  }
+  
+  // Second attacker's turn (if alive)
+  if (second.atk.currentHp > 0 && canAttack(second.atk, turnLog)) {
+    if (second.move) executeAttack(second.atk, second.def, second.move, turnLog, state.turn);
+  }
+
+  if (p1.currentHp > 0) applyStatusDamage(p1, turnLog);
+  if (p2.currentHp > 0) applyStatusDamage(p2, turnLog);
+
+  const handleFaint = (p, teamIdx) => {
+    if (p.currentHp <= 0 && !p._fainted) {
+      p.currentHp = 0; p._fainted = true;
+      turnLog.push({ type: 'faint', message: `💀 ¡${p.name} se ha debilitado!`, pokemon: p.name });
+      if (teamIdx === 1) {
+        state.t1Index++;
+        if (state.t1Index < state.t1Pokemon.length) {
+          const nextP = state.t1Pokemon[state.t1Index];
+          turnLog.push({ type: 'switch', message: `🔄 ¡${nextP.name} entra al combate!`, pokemon: nextP.name, team: 1 });
+          state._justSwitched = true;
+        }
+      } else {
+        state.t2Index++;
+        if (state.t2Index < state.t2Pokemon.length) {
+          const nextP = state.t2Pokemon[state.t2Index];
+          turnLog.push({ type: 'switch', message: `🔄 ¡${nextP.name} entra al combate!`, pokemon: nextP.name, team: 2 });
+          state._justSwitched = true;
+        }
+      }
+    }
+  };
+
+  handleFaint(p1, 1);
+  handleFaint(p2, 2);
+
+  // Check win conditions
+  if (state.t1Index >= state.t1Pokemon.length && state.t2Index >= state.t2Pokemon.length) {
+    state.winner = 'draw';
+    turnLog.push({ type: 'end', message: '🤝 ¡La batalla terminó en empate!' });
+  } else if (state.t1Index >= state.t1Pokemon.length) {
+    state.winner = 2;
+    turnLog.push({ type: 'end', message: '🏆 ¡El Equipo 2 gana la batalla!', winner: 2 });
+  } else if (state.t2Index >= state.t2Pokemon.length) {
+    state.winner = 1;
+    turnLog.push({ type: 'end', message: '🏆 ¡El Equipo 1 gana la batalla!', winner: 1 });
+  }
+
+  state.log.push(...turnLog);
+  return turnLog;
+}
+
+module.exports = { initBattle, processTurn, activeBattles };
