@@ -68,8 +68,8 @@ router.post('/', auth, async (req, res) => {
 
     // Store in-memory
     state.dbId = battle._id;
-    state.socketP1 = req.user.id;
-    state.socketP2 = opponent_id;
+    state.challengerId = req.user.id;
+    state.opponentId = opponent_id;
     state.p1Username = req.user.username;
     state.p2Username = opponentUser?.username || 'Oponente';
     state.actionsQueue = { p1: null, p2: null };

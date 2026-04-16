@@ -104,8 +104,8 @@ const initSockets = (server) => {
       }
 
       // Identify player
-      const isP1 = state.challengerId === socket.user.id;
-      const isP2 = state.opponentId === socket.user.id;
+      const isP1 = String(state.challengerId) === String(socket.user.id);
+      const isP2 = String(state.opponentId) === String(socket.user.id);
       if (!isP1 && !isP2) return;
 
       const pStateStr = isP1 ? 'p1' : 'p2';
